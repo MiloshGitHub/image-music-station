@@ -38,6 +38,8 @@ The app has three tracks, each analysing an image locally. The synth track uses 
 ### 2. Drums (16-channel drum rack)
 - The image is scanned left to right; colors are grouped into 16 hue bands, each mapped to one drum sound.
 - **Drum threshold** slider (0-100%): higher values ignore pale or dark pixels and keep only the dominant, saturated colors, so busy images no longer fill every trigger.
+- Each drum-rack channel uses its own locally bundled one-shot sample; if a sample cannot load, that channel falls back to its synth voice.
+- Choose a sample from the dropdown on each drum-rack row; the list is filtered to that instrument type, and changes apply to subsequent hits.
 - Optional separate image upload, 8-64 steps, clickable pads to edit the pattern.
 - **Drum mixer** (section 3): a horizontal fader per drum sound (0-150%, 0 mutes), lined up row-for-row with the drum rack, with a reset button, applied live.
 
@@ -51,10 +53,15 @@ The app has three tracks, each analysing an image locally. The synth track uses 
 - Video decoding depends on the browser; if a file fails, use an H.264 MP4 or WebM clip.
 
 ### Mixer
-Per-track volume sliders (synth, drums, pads) plus master volume and a shared BPM.
+Per-track volume sliders (synth, drums, pads) plus master volume and a shared BPM. The Record control captures the post-limiter master mix, preserving its audio channels; after stopping, enter a filename and choose a local save location where the browser supports a file picker.
 
 ## Audio quality
-The engine uses a `playback` latency hint with a 0.2 s look-ahead, a master limiter, a convolution reverb for pads and a light 2-oscillator pad voice. UI updates are synced to the audio clock and the drum grid is memoized. If playback stutters, use `npm run build && npm run preview` (the dev build is much heavier) and close other heavy tabs.
+The engine uses a `playback` latency hint with a 0.2 s look-ahead, a master limiter, locally bundled drum one-shots, a convolution reverb for pads and a light 2-oscillator pad voice. UI updates are synced to the audio clock and the drum grid is memoized. If playback stutters, use `npm run build && npm run preview` (the dev build is much heavier) and close other heavy tabs.
+
+### Drum sample credits
+The selected one-shots in `public/drums/` are from Octal's [house-core v0.1.0 sample pack](https://github.com/octalmusic/octal-samples/tree/v0.1.0), which is dedicated to the public domain under CC0-1.0. The original pack's [license audit](https://github.com/octalmusic/octal-samples/blob/v0.1.0/LICENSES.md) records the provenance and processing of each sample. Bundled roles are kick, sub kick, snare, clap, closed/open hat, rim, three toms, shaker, two percussion hits, ride, crash and FX.
+
+Additional samples from [Boochi44's free-drum-samples](https://github.com/Boochi44/free-drum-samples/tree/77ba31428a079dd8f17c8e144c1e649ea0a198b3) are bundled under the same `public/drums/` instrument folders. Its README states that the samples are CC0-1.0. The three kits (Hard Trap, Bounce and Soulful Vintage) are included; filenames are prefixed with the kit and sample role to avoid collisions. The 808 samples are in `kicks/`, and closed/open hats are in `hats/`. These additional samples are assets only; the current playback mapping continues to use the Octal samples.
 
 ## Notes / current scope
 This is an experimental browser-based image-to-music station. Only the synth track is exported to MIDI; drums and pads are playback-only. Local-only processing: images and videos are never uploaded to a server.

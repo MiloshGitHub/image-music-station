@@ -311,7 +311,9 @@
 }
 
 .drum-seq-panel {
-  min-width: 560px;
+  width: max-content;
+  min-width: 0;
+  flex: 0 0 auto;
 }
 
 .drum-legend {
@@ -339,17 +341,27 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
+  width: max-content;
 }
 
 .drum-row {
   display: grid;
-  grid-template-columns: 92px minmax(0, 1fr);
+  grid-template-columns: 150px max-content;
   gap: 8px;
   align-items: center;
+  min-height: 44px;
+}
+
+.drum-voice-control {
+  display: grid;
+  grid-template-rows: 19px 21px;
+  gap: 2px;
+  min-width: 0;
 }
 
 .drum-pad {
   width: 100%;
+  min-width: 0;
   border: 1px solid #36404f;
   border-left-width: 4px;
   border-radius: 6px;
@@ -357,12 +369,24 @@
   color: #d3ddec;
   font-size: 10px;
   font-weight: 700;
-  padding: 6px 8px;
+  padding: 2px 6px;
   text-align: left;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: default;
+}
+
+.drum-sample-select {
+  width: 100%;
+  min-width: 0;
+  height: 21px;
+  padding: 1px 4px;
+  border: 1px solid #343d49;
+  border-radius: 5px;
+  background: #171c24;
+  color: #c4cfdd;
+  font-size: 9px;
 }
 
 .drum-steps {
@@ -372,9 +396,8 @@
 }
 
 .drum-step {
-  flex: 1 1 0;
-  min-width: 0;
-  max-width: 28px;
+  flex: 0 0 28px;
+  width: 28px;
   height: 28px;
   padding: 0;
   border: 1px solid #2f3948;
@@ -433,6 +456,106 @@
 .mixer-channel.master {
   padding-left: 14px;
   border-left: 1px solid #2a323e;
+}
+
+.record-button {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid #7a3840;
+  border-radius: 7px;
+  background: #2b171b;
+  color: #ff8b91;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .05em;
+  white-space: nowrap;
+}
+
+.record-button:hover,
+.record-button.is-recording {
+  background: #5b2229;
+  border-color: #e85d68;
+  color: #fff;
+}
+
+.record-button:not(.is-recording) svg {
+  color: #ff5d67;
+}
+
+.recording-modal-backdrop {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgb(5 8 12 / 78%);
+  backdrop-filter: blur(5px);
+}
+
+.recording-modal {
+  width: min(100%, 440px);
+  padding: 22px;
+  border: 1px solid #394453;
+  border-radius: 12px;
+  background: linear-gradient(150deg, #1b222c, #11161d);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 45%);
+}
+
+.recording-modal-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.recording-modal-heading h2 {
+  margin: 5px 0 0;
+  font-size: 18px;
+}
+
+.recording-filename-label {
+  display: block;
+  margin-bottom: 7px;
+  color: #98a5b5;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .12em;
+}
+
+.recording-filename {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #3c4857;
+  border-radius: 7px;
+  outline: none;
+  background: #0e1319;
+  color: #e7ebf2;
+  font-size: 12px;
+}
+
+.recording-filename:focus {
+  border-color: #8ce0c0;
+}
+
+.recording-modal .control-hint {
+  margin: 10px 0 18px;
+}
+
+.recording-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.recording-modal-actions button:disabled {
+  cursor: wait;
+  opacity: .6;
 }
 
 .drum-upload {
@@ -538,7 +661,7 @@
   width: 250px;
 }
 
-/* Rows mirror .drum-rack-grid (28px rows, 3px gap) so each fader lines up with its drum row. */
+/* Rows mirror .drum-rack-grid (44px rows, 3px gap) so each fader lines up with its drum row. */
 .drum-mixer {
   display: flex;
   flex-direction: column;
@@ -550,7 +673,7 @@
   grid-template-columns: minmax(0, 1fr) 38px;
   align-items: center;
   gap: 8px;
-  height: 28px;
+  height: 44px;
 }
 
 .drum-fader output {

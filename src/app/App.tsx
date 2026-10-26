@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Camera, Download, ImagePlus, Pause, Play, RotateCcw, RotateCw, Volume2, Waves, RotateCw as Refresh } from 'lucide-react';
+import { Camera, Circle, Download, ImagePlus, Pause, Play, RotateCcw, RotateCw, Square, Volume2, Waves, X, RotateCw as Refresh } from 'lucide-react';
 import type { AnalysisMode, DrumPattern, DurationSource, NoteEvent, PadChord, PitchSource, VolumeSource } from '../music/events';
 import { extractFeatures } from '../image/analysis';
 import { getPixels } from '../image/rotateImage';
@@ -15,6 +15,7 @@ import PadChordStrip from '../components/PadChordStrip';
 import { midiName, NOTE_NAMES, SCALES } from '../music/scales';
 import { downloadMidi } from '../music/exportMidi';
 import { AudioEngine } from '../audio/AudioEngine';
+import { DEFAULT_DRUM_SAMPLE_PATHS } from '../music/drumSamples';
 import ImageEditor from '../components/ImageEditor';
 import CircularSequencer from '../components/CircularSequencer';
 import StepGrid from '../components/StepGrid';
@@ -45,6 +46,15 @@ const modeLabels: Record<AnalysisMode, string> = {
   'line-to-follow': 'Line to Follow',
 };
 
+type SaveFilePickerWindow = Window & {
+  showSaveFilePicker?: (options: { suggestedName: string }) => Promise<{
+    createWritable: () => Promise<{
+      write: (data: Blob) => Promise<void>;
+      close: () => Promise<void>;
+    }>;
+  }>;
+};
+
 export default function App() {
   const [imageUrl, setImageUrl] = useState<string | null>(initialSvg);
   const [rotation, setRotation] = useState(0);
@@ -69,6 +79,10 @@ export default function App() {
   const [threshold, setThreshold] = useState(12);
   const [view, setView] = useState<'circle' | 'grid'>('circle');
   const [playing, setPlaying] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [recordingBlob, setRecordingBlob] = useState<Blob | null>(null);
+  const [recordingFilename, setRecordingFilename] = useState('');
+  const [savingRecording, setSavingRecording] = useState(false);
   const [activeStep, setActiveStep] = useState(0);
   const drumPlayhead = useMemo(() => createPlayhead(0), []);
   const [status, setStatus] = useState('Ready · image analysis runs locally');
@@ -78,6 +92,7 @@ export default function App() {
   const [features, setFeatures] = useState<ReturnType<typeof extractFeatures>>([]);
   const [events, setEvents] = useState<NoteEvent[]>([]);
   const [drumChannelVolumes, setDrumChannelVolumes] = useState<number[]>(() => Array(16).fill(100));
+  const [drumSamplePaths, setDrumSamplePaths] = useState<string[]>(() => [...DEFAULT_DRUM_SAMPLE_PATHS]);
   const [padSections, setPadSections] = useState(6);
   const [padBars, setPadBars] = useState(2);
   const [padSensitivity, setPadSensitivity] = useState(30);
@@ -152,6 +167,9 @@ export default function App() {
   useEffect(() => {
     drumChannelVolumes.forEach((value, channel) => engineRef.current?.setDrumChannelVolume(channel, value / 100));
   }, [drumChannelVolumes, audioEngine]);
+  useEffect(() => {
+    drumSamplePaths.forEach((url, channel) => engineRef.current?.setDrumSample(channel, url));
+  }, [drumSamplePaths, audioEngine]);
   useEffect(() => {
     engineRef.current?.setPadVolume(padVolume / 100);
   }, [padVolume, audioEngine]);
@@ -314,6 +332,61 @@ export default function App() {
     setActivePadChord(0);
     setStatus('Playback stopped');
   };
+  const handleRecording = async () => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    if (!recording) {
+      try {
+        await engine.startRecording();
+        setRecording(true);
+        setStatus('Recording master output');
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : `Could not start recording: ${String(error)}`);
+      }
+      return;
+    }
+    try {
+      const blob = await engine.stopRecording();
+      const extension = blob.type.includes('ogg') ? 'ogg' : blob.type.includes('mp4') ? 'm4a' : 'webm';
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      setRecordingBlob(blob);
+      setRecordingFilename(`image-music-recording-${timestamp}.${extension}`);
+      setRecording(false);
+      setStatus('Recording stopped · choose a filename and save location');
+    } catch (error) {
+      setRecording(false);
+      setStatus(error instanceof Error ? error.message : `Could not stop recording: ${String(error)}`);
+    }
+  };
+  const saveRecording = async () => {
+    if (!recordingBlob || !recordingFilename.trim()) return;
+    setSavingRecording(true);
+    try {
+      const fileName = recordingFilename.trim().replace(/[<>:"/\\|?*]/g, '-');
+      const pickerWindow = window as SaveFilePickerWindow;
+      if (pickerWindow.showSaveFilePicker) {
+        const fileHandle = await pickerWindow.showSaveFilePicker({ suggestedName: fileName });
+        const writable = await fileHandle.createWritable();
+        await writable.write(recordingBlob);
+        await writable.close();
+      } else {
+        const url = URL.createObjectURL(recordingBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        link.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+      setRecordingBlob(null);
+      setStatus(`Saved ${fileName}`);
+    } catch (error) {
+      if (!(error instanceof Error && error.name === 'AbortError')) {
+        setStatus(error instanceof Error ? error.message : `Could not save recording: ${String(error)}`);
+      }
+    } finally {
+      setSavingRecording(false);
+    }
+  };
   const commitBpm = () => {
     const parsed = Number(bpmInput);
     const next = bpmInput.trim() && Number.isFinite(parsed)
@@ -343,11 +416,6 @@ export default function App() {
       <header className="topbar">
         <div className="brand"><div className="brand-mark"><Waves size={20} /></div><div><b>IMAGE MUSIC</b><span>STATION / PROTOTYPE 002</span></div></div>
         <div className="top-status"><span className="status-dot" />{status}</div>
-        <div className="top-actions">
-          <button className="icon-button" title="Upload image" onClick={() => fileRef.current?.click()}><ImagePlus size={17} /></button>
-          <button className="icon-button" title="Use camera" onClick={() => cameraRef.current?.click()}><Camera size={17} /></button>
-          <button className="export-button" onClick={() => downloadMidi(events, bpm, stepBeats)}><Download size={15} /> Export MIDI</button>
-        </div>
         <input ref={fileRef} type="file" accept="image/*" hidden onChange={event => handleFile(event.target.files?.[0])} />
         <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={event => handleFile(event.target.files?.[0])} />
       </header>
@@ -373,8 +441,42 @@ export default function App() {
           <div className="mixer-channel"><label>DRUMS</label><input aria-label="Drum track volume" type="range" min="0" max="100" value={drumVolume} onChange={event => setDrumVolume(Number(event.target.value))} /><span>{drumVolume}%</span></div>
           <div className="mixer-channel"><label>PADS</label><input aria-label="Pad track volume" type="range" min="0" max="100" value={padVolume} onChange={event => setPadVolume(Number(event.target.value))} /><span>{padVolume}%</span></div>
           <div className="mixer-channel master"><label><Volume2 size={11} /> MASTER</label><input aria-label="Master volume" type="range" min="0" max="100" value={volume} onChange={event => setVolume(Number(event.target.value))} /><span>{volume}%</span></div>
+          <button
+            className={`record-button${recording ? ' is-recording' : ''}`}
+            aria-label={recording ? 'Stop recording' : 'Start recording'}
+            title={recording ? 'Stop recording' : 'Record master output'}
+            onClick={() => { void handleRecording(); }}
+          >
+            {recording ? <Square size={14} fill="currentColor" /> : <Circle size={14} fill="currentColor" />}
+            {recording ? 'STOP REC' : 'REC'}
+          </button>
         </div>
       </section>
+      {recordingBlob && (
+        <div className="recording-modal-backdrop">
+          <section className="recording-modal" role="dialog" aria-modal="true" aria-labelledby="recording-title">
+            <div className="recording-modal-heading">
+              <div><span className="eyebrow">MASTER RECORDING</span><h2 id="recording-title">Save recording</h2></div>
+              <button className="icon-button" aria-label="Cancel save" onClick={() => setRecordingBlob(null)}><X size={16} /></button>
+            </div>
+            <label className="recording-filename-label" htmlFor="recording-filename">FILE NAME</label>
+            <input
+              id="recording-filename"
+              className="recording-filename"
+              value={recordingFilename}
+              onChange={event => setRecordingFilename(event.target.value)}
+              autoFocus
+            />
+            <p className="control-hint">Choose a local folder in the save dialog. If your browser does not support a save dialog, the file is downloaded to its configured downloads location.</p>
+            <div className="recording-modal-actions">
+              <button className="secondary-button" onClick={() => setRecordingBlob(null)}>Cancel</button>
+              <button className="export-button" disabled={savingRecording || !recordingFilename.trim()} onClick={() => { void saveRecording(); }}>
+                <Download size={15} />{savingRecording ? 'Saving…' : 'Choose location & save'}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
 
       <div className="track-stack"><div className="track-viewport"><div className="workspace">
         <section className="panel image-panel">
@@ -423,6 +525,7 @@ export default function App() {
               <label className="sequencer-setting"><span>STEPS</span><select value={steps} onChange={event => setSteps(Number(event.target.value))}>{STEP_OPTIONS.map(count => <option key={count} value={count}>{count}</option>)}</select></label>
               <label className="sequencer-setting note-setting"><span>STEP NOTE</span><select value={noteType} onChange={event => setNoteType(event.target.value as NoteType)}>{NOTE_TYPES.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
               <div className="view-switch"><button className={view === 'circle' ? 'selected' : ''} onClick={() => setView('circle')}>Circle</button><button className={view === 'grid' ? 'selected' : ''} onClick={() => setView('grid')}>Grid</button></div>
+              <button className="export-button" onClick={() => downloadMidi(events, bpm, stepBeats)}><Download size={15} /> Export MIDI</button>
             </div>
           </div>
           <div className="sequencer-body">
@@ -459,7 +562,13 @@ export default function App() {
         </section>
         <section className="panel drum-seq-panel">
           <div className="panel-heading"><div><span className="eyebrow">02 / DRUM SEQUENCER · 16 CHANNELS</span><h2>Drum rack</h2></div><div className="sequencer-toolbar"><span className="count-pill">{activeDrumHits} ACTIVE HITS</span><label className="sequencer-setting"><span>STEPS</span><select value={drumSteps} onChange={event => setDrumSteps(Number(event.target.value))}>{DRUM_STEP_OPTIONS.map(count => <option key={count} value={count}>{count}</option>)}</select></label></div></div>
-          <DrumRackGrid pattern={drumPattern} playhead={drumPlayhead} onToggle={toggleDrumHit} />
+          <DrumRackGrid
+            pattern={drumPattern}
+            playhead={drumPlayhead}
+            onToggle={toggleDrumHit}
+            samplePaths={drumSamplePaths}
+            onSampleChange={(channel, url) => setDrumSamplePaths(current => current.map((sample, index) => index === channel ? url : sample))}
+          />
         </section>
         <DrumMixer
           channels={drumPattern.channels}

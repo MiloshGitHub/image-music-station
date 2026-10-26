@@ -1,5 +1,6 @@
 import * as Tone from 'tone';
 import type { DrumPattern, NoteEvent, PadChord } from '../music/events';
+import { DEFAULT_DRUM_SAMPLE_PATHS, DRUM_SAMPLE_OPTIONS, getDrumSampleCategory } from '../music/drumSamples';
 
 type PatternConfig = {
   synthEvents: NoteEvent[];
@@ -27,6 +28,12 @@ export class AudioEngine {
   private limiter: Tone.Limiter;
   private drumBus: Tone.Gain;
   private drumVoices: Tone.MembraneSynth[];
+  private drumSamples: Array<Tone.Player | null> = Array(16).fill(null);
+  private drumSampleLoaded: boolean[] = Array(16).fill(false);
+  private drumSampleVersions: number[] = Array(16).fill(0);
+  private drumSamplePaths = [...DEFAULT_DRUM_SAMPLE_PATHS];
+  private drumSampleLoads: Promise<void>[] = [];
+  private drumChannelGains: number[] = Array(16).fill(1);
   private drumNotes: string[];
   private drumPattern: DrumPattern = { steps: 16, channels: [], hits: [] };
   private padSynth: Tone.PolySynth;
@@ -43,6 +50,13 @@ export class AudioEngine {
   private onPadChord?: (index: number) => void;
   private padLoopId: number | null = null;
   private loopId: number | null = null;
+  private disposed = false;
+  private recordingDestination: MediaStreamAudioDestinationNode | null = null;
+  private mediaRecorder: MediaRecorder | null = null;
+  private recordingChunks: Blob[] = [];
+  private recordingResult: Promise<Blob> | null = null;
+  private resolveRecording?: (blob: Blob) => void;
+  private rejectRecording?: (error: Error) => void;
   private events: NoteEvent[] = [];
   private bpm = 112;
   private stepNotation = '16n';
@@ -64,6 +78,7 @@ export class AudioEngine {
       octaves: 2 + (index % 3),
       envelope: { attack: 0.001, decay: 0.18 + index * 0.006, sustain: 0.01, release: 0.08 },
     }));
+    this.drumSampleLoads = this.drumSamplePaths.map((url, channel) => this.loadDrumSample(channel, url));
     this.padSynth = new Tone.PolySynth(Tone.Synth, {
       oscillator: { type: 'fatsawtooth', count: 2, spread: 24 },
       envelope: { attack: 1.6, decay: 0.8, sustain: 0.85, release: 3.5 },
@@ -111,6 +126,7 @@ export class AudioEngine {
 
   async play() {
     await Tone.start();
+    await Promise.all(this.drumSampleLoads);
     this.stop();
     Tone.getTransport().bpm.value = this.bpm;
     let current = 0;
@@ -129,16 +145,94 @@ export class AudioEngine {
         this.synth.triggerAttackRelease(Tone.Frequency(event.pitch, 'midi').toNote(), event.duration * 60 / this.bpm, time, event.velocity);
       }
       drumHits.forEach(hit => {
-        const note = this.drumNotes[hit.channel % this.drumNotes.length];
-        const synth = this.drumVoices[hit.channel % this.drumVoices.length];
+        const channel = hit.channel % this.drumVoices.length;
+        const note = this.drumNotes[channel];
+        const synth = this.drumVoices[channel];
         const length = Math.max(0.05, (0.09 + hit.velocity * 0.16) * 60 / this.bpm);
-        synth.triggerAttackRelease(note, length, time, Math.max(0.1, hit.velocity));
+        const gain = this.drumChannelGains[channel];
+        const sample = this.drumSamples[channel];
+        if (gain <= 0) return;
+        if (this.drumSampleLoaded[channel] && sample) {
+          sample.volume.setValueAtTime(-8 + 20 * Math.log10(gain * Math.max(0.1, hit.velocity)), time);
+          sample.start(time);
+        } else {
+          synth.triggerAttackRelease(note, length, time, Math.max(0.1, hit.velocity));
+        }
       });
       current = (current + 1) % Math.max(1, this.events.length);
       drumStep = (drumStep + 1) % Math.max(1, this.drumPattern.steps);
     }, this.stepNotation);
     this.schedulePad();
     Tone.getTransport().start();
+  }
+
+  async startRecording() {
+    if (this.mediaRecorder?.state === 'recording') return;
+    if (typeof MediaRecorder === 'undefined') {
+      throw new Error('Audio recording is not supported in this browser.');
+    }
+    await Tone.start();
+    const audioContext = Tone.getContext().rawContext;
+    if (!('createMediaStreamDestination' in audioContext)) {
+      throw new Error('Audio recording requires a live browser audio context.');
+    }
+    const destination = audioContext.createMediaStreamDestination();
+    Tone.getDestination().output.connect(destination);
+
+    const mimeType = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4']
+      .find(type => MediaRecorder.isTypeSupported(type));
+    try {
+      const recorder = new MediaRecorder(destination.stream, mimeType ? { mimeType } : undefined);
+      this.recordingDestination = destination;
+      this.mediaRecorder = recorder;
+      this.recordingChunks = [];
+      this.recordingResult = new Promise<Blob>((resolve, reject) => {
+        this.resolveRecording = resolve;
+        this.rejectRecording = reject;
+      });
+      recorder.addEventListener('dataavailable', event => {
+        if (event.data.size > 0) this.recordingChunks.push(event.data);
+      });
+      recorder.addEventListener('stop', () => {
+        const blob = new Blob(this.recordingChunks, { type: recorder.mimeType || 'audio/webm' });
+        const resolve = this.resolveRecording;
+        this.cleanupRecording();
+        resolve?.(blob);
+      }, { once: true });
+      recorder.addEventListener('error', event => {
+        const reject = this.rejectRecording;
+        const message = 'error' in event && event.error instanceof Error ? event.error.message : 'unknown error';
+        this.cleanupRecording();
+        reject?.(new Error(`Audio recording failed: ${message}`));
+      }, { once: true });
+      recorder.start();
+    } catch (error) {
+      this.cleanupRecording();
+      throw error;
+    }
+  }
+
+  stopRecording(): Promise<Blob> {
+    const recorder = this.mediaRecorder;
+    if (!recorder || recorder.state === 'inactive' || !this.recordingResult) {
+      throw new Error('There is no active recording.');
+    }
+    recorder.stop();
+    return this.recordingResult;
+  }
+
+  private cleanupRecording() {
+    const destination = this.recordingDestination;
+    if (destination) {
+      Tone.getDestination().output.disconnect(destination);
+      destination.stream.getTracks().forEach(track => track.stop());
+    }
+    this.recordingDestination = null;
+    this.mediaRecorder = null;
+    this.recordingChunks = [];
+    this.recordingResult = null;
+    this.resolveRecording = undefined;
+    this.rejectRecording = undefined;
   }
 
   // Pads play continuously: one chord is held for its number of bars, then the next one fades in.
@@ -223,8 +317,52 @@ export class AudioEngine {
   setDrumChannelVolume(channel: number, gain: number) {
     const voice = this.drumVoices[channel];
     if (!voice) return;
+    this.drumChannelGains[channel] = Math.max(0, gain);
     // Per-voice base level (matches the constructor) plus a user gain; 0 mutes.
     voice.volume.value = gain <= 0 ? -Infinity : -10 + (channel % 4) * 1.5 + 20 * Math.log10(gain);
+  }
+
+  setDrumSample(channel: number, url: string) {
+    const category = getDrumSampleCategory(channel);
+    if (this.disposed) return;
+    if (!Number.isInteger(channel) || channel < 0 || channel >= this.drumSamplePaths.length) return;
+    if (!DRUM_SAMPLE_OPTIONS[category].some(sample => sample.url === url)) return;
+    if (this.drumSamplePaths[channel] === url) return;
+    this.drumSamplePaths[channel] = url;
+    this.drumSampleLoads[channel] = this.loadDrumSample(channel, url);
+  }
+
+  private loadDrumSample(channel: number, url: string): Promise<void> {
+    const version = this.drumSampleVersions[channel] + 1;
+    this.drumSampleVersions[channel] = version;
+    return new Promise(resolve => {
+      const player = new Tone.Player({
+        url,
+        onload: () => {
+          if (this.disposed || this.drumSampleVersions[channel] !== version) {
+            player.dispose();
+            resolve();
+            return;
+          }
+          const previous = this.drumSamples[channel];
+          this.drumSamples[channel] = player;
+          this.drumSampleLoaded[channel] = true;
+          previous?.dispose();
+          resolve();
+        },
+        onerror: error => {
+          console.error(`Could not load drum sample ${url}; using the synth fallback.`, error);
+          if (this.drumSampleVersions[channel] === version) {
+            this.drumSamples[channel]?.dispose();
+            this.drumSamples[channel] = null;
+            this.drumSampleLoaded[channel] = false;
+          }
+          player.dispose();
+          resolve();
+        },
+      });
+      player.connect(this.drumBus);
+    });
   }
 
   setDrumVolume(gain: number) {
@@ -245,6 +383,8 @@ export class AudioEngine {
   }
 
   dispose() {
+    this.disposed = true;
+    if (this.mediaRecorder?.state === 'recording') this.mediaRecorder.stop();
     this.stop();
     this.synth.dispose();
     this.padSynth.dispose();
@@ -259,6 +399,7 @@ export class AudioEngine {
     this.padAnalyser.dispose();
     this.drumBus.dispose();
     this.drumVoices.forEach(voice => voice.dispose());
+    this.drumSamples.forEach(sample => sample?.dispose());
     this.filter.dispose();
     this.analyser.dispose();
     this.limiter.dispose();

@@ -1,6 +1,7 @@
 import { memo } from 'react';
 import type { CSSProperties } from 'react';
 import type { DrumPattern } from '../music/events';
+import { DRUM_SAMPLE_OPTIONS, getDrumSampleCategory } from '../music/drumSamples';
 import { usePlayhead } from '../audio/playhead';
 import type { Playhead } from '../audio/playhead';
 
@@ -8,6 +9,8 @@ type DrumRackGridProps = {
   pattern: DrumPattern;
   playhead: Playhead;
   onToggle: (channel: number, step: number) => void;
+  samplePaths: string[];
+  onSampleChange: (channel: number, url: string) => void;
 };
 
 type DrumStepProps = {
@@ -37,16 +40,29 @@ function cellKey(channel: number, step: number) {
   return `${channel}:${step}`;
 }
 
-export default function DrumRackGrid({ pattern, playhead, onToggle }: DrumRackGridProps) {
+export default function DrumRackGrid({ pattern, playhead, onToggle, samplePaths, onSampleChange }: DrumRackGridProps) {
   const activeStep = usePlayhead(playhead);
   const cellMap = new Map(pattern.hits.map(hit => [cellKey(hit.channel, hit.step), hit]));
   return (
     <div className="drum-rack-grid" role="grid" aria-label="Drum rack sequencer grid">
       {pattern.channels.map(channel => (
         <div key={channel.index} className="drum-row" role="row">
-          <button className="drum-pad" style={{ borderColor: channel.color, color: channel.color }}>
-            {channel.name}
-          </button>
+          <div className="drum-voice-control">
+            <button className="drum-pad" style={{ borderColor: channel.color, color: channel.color }}>
+              {channel.name}
+            </button>
+            <select
+              className="drum-sample-select"
+              aria-label={`${channel.name} sample`}
+              title={`${channel.name} sample`}
+              value={samplePaths[channel.index]}
+              onChange={event => onSampleChange(channel.index, event.target.value)}
+            >
+              {DRUM_SAMPLE_OPTIONS[getDrumSampleCategory(channel.index)].map(sample => (
+                <option key={sample.url} value={sample.url}>{sample.label}</option>
+              ))}
+            </select>
+          </div>
           <div className="drum-steps">
             {Array.from({ length: pattern.steps }, (_, step) => {
               const hit = cellMap.get(cellKey(channel.index, step));
